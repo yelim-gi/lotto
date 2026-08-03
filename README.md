@@ -1,67 +1,34 @@
-# 로또 데이터 추천기
+# Lotto Data + Gemini Recommender
 
-React + Vite로 만든 로또 6/45 전용 웹앱입니다. GitHub에 업로드한 뒤 Vercel에 연결하고, Supabase를 데이터 저장소로 사용합니다.
+Vercel 배포용 Vite 프로젝트입니다. 통계 추천, Gemini AI 추천, 둘 다 보기, 내 번호 저장, 통계, 관리자 수동 회차 추가를 포함합니다.
 
-## 포함 기능
-- 1~10게임 데이터 기반 추천
-- 종합/최근 강세/장기 미출현/전체 빈도 모드
-- 고정 번호 선택
-- 내 번호 저장, 직접 입력, 회차별 당첨 확인
-- 번호별 전체·최근 50회·미출현 통계
-- 관리자 최신 회차 수동 등록 및 기존 회차 수정
-- GitHub 공개 데이터 수동 동기화
-- 새 회차 저장 즉시 추천·통계 반영
+## Vercel 환경변수
 
-## 1. Supabase 전용 프로젝트 만들기
-Supabase에서 `New project`를 눌러 이 앱 전용 프로젝트를 만듭니다. SQL Editor에서 `supabase/schema.sql` 전체를 실행합니다.
+- `VITE_SUPABASE_URL`: `https://프로젝트ID.supabase.co`
+- `VITE_SUPABASE_ANON_KEY`: Supabase publishable/anon key
+- `SUPABASE_URL`: 위 Project URL과 동일
+- `SUPABASE_SERVICE_ROLE_KEY`: Supabase secret/service role key
+- `ADMIN_SYNC_SECRET`: 관리자 수동 업데이트 비밀번호
+- `LOTTO_DATA_URL`: `https://smok95.github.io/lotto/results/all.json`
+- `GEMINI_API_KEY`: Google AI Studio에서 발급한 Gemini API key
+- `GEMINI_MODEL`: 기본값 `gemini-2.5-flash` (생략 가능)
 
-Authentication → Providers 또는 Sign In / Providers에서 **Anonymous Sign-Ins**를 활성화합니다.
+`GEMINI_API_KEY`와 `SUPABASE_SERVICE_ROLE_KEY`에는 절대 `VITE_`를 붙이지 마세요.
 
-## 2. GitHub 업로드
-이 폴더의 파일 전체를 저장소 최상단에 올립니다.
+## Supabase
 
-## 3. Vercel 배포
-GitHub 저장소를 Vercel에 연결합니다. Vercel이 Vite를 자동 감지합니다.
-- Build Command: `npm run build`
-- Output Directory: `dist`
+1. 새 Supabase 프로젝트를 만듭니다.
+2. `supabase/schema.sql`을 SQL Editor에서 실행합니다.
+3. Authentication > Providers에서 Anonymous Sign-ins를 켭니다.
 
-Vercel → Settings → Environment Variables에 다음 값을 등록합니다.
-```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
-ADMIN_SYNC_SECRET=길고_무작위인_관리비밀번호
-LOTTO_DATA_URL=https://smok95.github.io/lotto/results/all.json
-```
-`VITE_`가 붙은 두 값만 브라우저에서 사용됩니다. 서버 함수는 별도의 `SUPABASE_URL`을 사용합니다. `SUPABASE_SERVICE_ROLE_KEY`와 `ADMIN_SYNC_SECRET`은 Vercel 서버 함수에서만 사용되므로 절대 `VITE_`를 붙이지 마세요.
+## 배포
 
-## 4. 초기 1~1234회 데이터 넣기
-로컬에서 한 번 실행합니다.
-```bash
-npm install
-# macOS/Linux
-export VITE_SUPABASE_URL="..."
-export SUPABASE_SERVICE_ROLE_KEY="..."
-npm run seed
-```
-Windows PowerShell:
-```powershell
-$env:VITE_SUPABASE_URL="..."
-$env:SUPABASE_SERVICE_ROLE_KEY="..."
-npm run seed
-```
-로컬 명령이 어렵다면 앱 배포 후 관리자 탭의 `GitHub 최신 데이터 동기화`를 눌러도 전체 데이터가 입력됩니다. 처음 실행은 약간 걸릴 수 있습니다.
+1. 이 폴더를 GitHub 저장소에 업로드합니다.
+2. Vercel에서 저장소를 Import합니다.
+3. Framework Preset은 Vite, Build Command는 `npm run build`, Output Directory는 `dist`입니다.
+4. 위 환경변수를 Production/Preview/Development에 추가합니다.
+5. Redeploy합니다.
 
-## 5. 최신 회차 수동 입력
-앱의 관리자 탭에서 관리 비밀번호, 회차, 추첨일, 번호 6개, 보너스번호를 입력합니다. 같은 회차가 이미 있으면 확인 후 수정(upsert)됩니다. 저장 직후 브라우저가 Supabase 데이터를 다시 불러와 통계와 이후 추천에 반영합니다.
+## AI 추천 방식
 
-## Vite와 Vercel 차이
-Vite는 앱을 개발·빌드하는 도구이고 Vercel은 빌드된 앱을 인터넷에 배포하는 서비스입니다. 따라서 Vercel 배포 프로젝트여도 `VITE_SUPABASE_URL` 같은 Vite 공개 환경변수를 사용합니다.
-
-## 주의
-이 앱의 추천 점수는 과거 데이터 기반 가중치이며 실제 로또의 수학적 당첨 확률을 높이지 않습니다.
-
-
-## 추천 모델
-추천 화면은 여러 모드로 나뉘지 않습니다. 전체 출현 빈도, 최근 30회 및 100회 흐름, 번호 간 동반출현, 미출현 기간, 홀짝·저고번호·합계·연속수 분포를 함께 계산합니다. 각 조합의 추천지수는 실제 당첨 확률이 아니라 과거 데이터 기준 통계 적합도입니다.
+브라우저는 전체/최근/미출현/번호쌍/조합 분포 요약과 통계 후보 조합을 Vercel 서버 함수로 보냅니다. 서버 함수가 Gemini API를 호출합니다. API 키는 브라우저로 전달되지 않습니다. Gemini는 제공된 데이터에 근거해 추세 지속 또는 평균 회귀 등의 조건부 시나리오를 세우고 번호와 선택 이유를 반환합니다.
