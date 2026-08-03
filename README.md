@@ -1,52 +1,62 @@
-# Lotto Data + Gemini Recommender
+# 로또 데이터·AI 추천기
 
-Vercel 배포용 Vite 프로젝트입니다. 통계 추천, Gemini AI 추천, 둘 다 보기, 내 번호 저장, 통계, 관리자 수동 회차 추가를 포함합니다.
+Vercel + Supabase + Gemini API용 Vite 프로젝트입니다.
+
+## 이번 버전의 핵심 변경
+
+- `내 번호`: 아직 구매하지 않은 마음에 드는 번호 보관
+- `내 구매`: 실제 구매한 번호를 회차와 함께 등록
+- 관리자에서 해당 회차 당첨번호를 추가하면 내 구매에서 자동 판정
+  - 1등: 6개 일치
+  - 2등: 5개 + 보너스 일치
+  - 3등: 5개 일치
+  - 4등: 4개 일치
+  - 5등: 3개 일치
+  - 그 외: 낙첨
+  - 회차 미등록: 추첨 전
+- 추천 결과마다 `내 번호 저장`과 `구매 등록` 버튼 분리
+- Gemini 호출을 게임별 여러 번 호출하던 구조에서 **생성 1회당 API 1회**로 축소
+- Gemini 429 무료 한도 오류를 팝업 원문 대신 한국어 안내로 처리
+- 동일 조건 Gemini 결과를 10분간 브라우저 캐시하여 불필요한 요청 방지
+- 무료 한도 대기시간 동안 재호출 방지
+
+## Supabase 설정
+
+1. Supabase 프로젝트에서 Anonymous Sign-Ins를 활성화합니다.
+2. `supabase/schema.sql` 전체를 SQL Editor에서 다시 실행합니다.
+   - 기존 테이블은 유지됩니다.
+   - `saved_tickets.ticket_type` 컬럼이 추가됩니다.
+3. 기존 저장번호는 자동으로 `내 번호(saved)`로 분류됩니다.
 
 ## Vercel 환경변수
 
-- `VITE_SUPABASE_URL`: `https://프로젝트ID.supabase.co`
-- `VITE_SUPABASE_ANON_KEY`: Supabase publishable/anon key
-- `SUPABASE_URL`: 위 Project URL과 동일
-- `SUPABASE_SERVICE_ROLE_KEY`: Supabase secret/service role key
-- `ADMIN_SYNC_SECRET`: 관리자 수동 업데이트 비밀번호
-- `LOTTO_DATA_URL`: `https://smok95.github.io/lotto/results/all.json`
-- `GEMINI_API_KEY`: Google AI Studio에서 발급한 Gemini API key
-- `GEMINI_MODEL`: 기본값 `gemini-3.5-flash` (생략 가능)
+```env
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_PUBLISHABLE_KEY
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SECRET_OR_SERVICE_ROLE_KEY
+ADMIN_SYNC_SECRET=YOUR_LONG_ADMIN_PASSWORD
+LOTTO_DATA_URL=https://smok95.github.io/lotto/results/all.json
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+GEMINI_MODEL=gemini-3.5-flash
+```
 
-`GEMINI_API_KEY`와 `SUPABASE_SERVICE_ROLE_KEY`에는 절대 `VITE_`를 붙이지 마세요.
+`GEMINI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`에는 `VITE_`를 붙이지 마세요.
+환경변수 변경 후에는 새 배포가 필요합니다.
 
-## Supabase
+## Gemini 무료 한도
 
-1. 새 Supabase 프로젝트를 만듭니다.
-2. `supabase/schema.sql`을 SQL Editor에서 실행합니다.
-3. Authentication > Providers에서 Anonymous Sign-ins를 켭니다.
+무료 한도 자체는 코드로 늘릴 수 없습니다. 화면에 `limit 20`이 표시됐다면 해당 API 키/프로젝트의 무료 요청량을 사용한 것입니다. 이 버전은 한 번 생성할 때 요청을 1회만 사용하도록 줄였지만, 이미 소진된 한도는 Google이 안내한 대기시간 이후 다시 사용할 수 있습니다. 계속 많이 사용할 경우 Google 결제 연결 또는 한도가 다른 프로젝트/API 키가 필요합니다.
 
-## 배포
+## 실행
 
-1. 이 폴더를 GitHub 저장소에 업로드합니다.
-2. Vercel에서 저장소를 Import합니다.
-3. Framework Preset은 Vite, Build Command는 `npm run build`, Output Directory는 `dist`입니다.
-4. 위 환경변수를 Production/Preview/Development에 추가합니다.
-5. Redeploy합니다.
+```bash
+npm install
+npm run dev
+```
 
-## AI 추천 방식
+배포 빌드:
 
-브라우저는 전체/최근/미출현/번호쌍/조합 분포 요약과 통계 후보 조합을 Vercel 서버 함수로 보냅니다. 서버 함수가 Gemini API를 호출합니다. API 키는 브라우저로 전달되지 않습니다. Gemini는 제공된 데이터에 근거해 추세 지속 또는 평균 회귀 등의 조건부 시나리오를 세우고 번호와 선택 이유를 반환합니다.
-
-## Gemini 응답 안정화
-
-AI 추천은 한 번의 긴 JSON 응답으로 번호와 설명을 모두 받지 않습니다.
-
-1. Gemini가 짧은 JSON으로 통계 후보 index와 예측 시나리오만 선택합니다.
-2. 선택된 각 게임의 이유는 별도의 짧은 텍스트 요청으로 생성합니다.
-3. 모든 게임 설명이 완성된 경우에만 결과를 화면에 표시합니다.
-
-따라서 응답 일부가 잘린 결과를 통계 조합으로 몰래 대체하지 않습니다. 실패 시에는 완성되지 않은 결과를 표시하지 않고 오류를 알려 다시 시도할 수 있게 합니다.
-
-
-## Gemini 응답 잘림 방지
-
-Gemini 3.5 Flash 호출은 `thinkingLevel: minimal`과 넉넉한 출력 한도를 사용합니다. 후보 선택, 시나리오, 게임별 이유를 분리 요청하여 긴 JSON이 중간에서 잘리지 않도록 구성했습니다.
-
-## v7 안정화 수정
-Gemini 후보 선택 응답을 JSON으로 파싱하지 않습니다. 모델은 `0,3,7` 형태의 짧은 index 목록만 반환하며 서버는 숫자만 추출합니다. 따라서 모델 응답 문자열이 흔들려도 `Unterminated string in JSON` 오류가 발생하지 않습니다.
+```bash
+npm run build
+```
