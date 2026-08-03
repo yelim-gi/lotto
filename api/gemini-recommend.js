@@ -1,4 +1,4 @@
-const MODEL=process.env.GEMINI_MODEL||'gemini-2.5-flash';
+const MODEL=process.env.GEMINI_MODEL||'gemini-3.5-flash';
 const validNumbers=nums=>Array.isArray(nums)&&nums.length===6&&new Set(nums).size===6&&nums.every(n=>Number.isInteger(n)&&n>=1&&n<=45);
 const jsonFromText=text=>{const clean=String(text||'').replace(/^```json\s*/i,'').replace(/```$/,'').trim();return JSON.parse(clean);};
 export default async function handler(req,res){
