@@ -29,11 +29,12 @@ Vercel → Settings → Environment Variables에 다음 값을 등록합니다.
 ```env
 VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 ADMIN_SYNC_SECRET=길고_무작위인_관리비밀번호
 LOTTO_DATA_URL=https://smok95.github.io/lotto/results/all.json
 ```
-`VITE_`가 붙은 두 값만 브라우저에서 사용됩니다. `SUPABASE_SERVICE_ROLE_KEY`와 `ADMIN_SYNC_SECRET`은 Vercel 서버 함수에서만 사용되므로 절대 `VITE_`를 붙이지 마세요.
+`VITE_`가 붙은 두 값만 브라우저에서 사용됩니다. 서버 함수는 별도의 `SUPABASE_URL`을 사용합니다. `SUPABASE_SERVICE_ROLE_KEY`와 `ADMIN_SYNC_SECRET`은 Vercel 서버 함수에서만 사용되므로 절대 `VITE_`를 붙이지 마세요.
 
 ## 4. 초기 1~1234회 데이터 넣기
 로컬에서 한 번 실행합니다.
