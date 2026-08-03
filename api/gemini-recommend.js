@@ -37,7 +37,7 @@ async function callGemini({ key, prompt, timeoutMs = 40000 }) {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.25,
-          maxOutputTokens: 1800,
+          maxOutputTokens: 700,
           thinkingConfig: { thinkingLevel: 'minimal' }
         }
       })
@@ -48,7 +48,7 @@ async function callGemini({ key, prompt, timeoutMs = 40000 }) {
     try { raw = rawText ? JSON.parse(rawText) : {}; } catch { /* Google 응답 자체가 비정상인 경우 */ }
 
     if (response.status === 429) {
-      const error = new Error('Gemini 무료 사용 한도를 초과했습니다.');
+      const error = new Error('Gemini 요청 제한에 걸렸습니다.');
       error.code = 'QUOTA_EXCEEDED';
       error.retryAfter = getRetrySeconds(raw);
       throw error;
@@ -115,7 +115,7 @@ export default async function handler(req, res) {
         score: Number(candidate?.score) || 0
       }))
       .filter((candidate) => validNumbers(candidate.numbers) && safeFixed.every((n) => candidate.numbers.includes(n)))
-      .slice(0, Math.min(18, Math.max(10, safeCount + 6)));
+      .slice(0, Math.min(10, Math.max(safeCount + 2, 6)));
 
     if (safeCandidates.length < safeCount) throw new Error('AI가 선택할 통계 후보가 부족합니다. 다시 생성해주세요.');
 
@@ -123,11 +123,11 @@ export default async function handler(req, res) {
       drawCount: snapshot.drawCount,
       latestDraw: snapshot.latestDraw,
       latestNumbers: snapshot.latestNumbers,
-      overallHot: (snapshot.overallHot || []).slice(0, 6),
-      recent30Hot: (snapshot.recent30Hot || []).slice(0, 6),
-      recent100Hot: (snapshot.recent100Hot || []).slice(0, 6),
-      longOverdue: (snapshot.longOverdue || []).slice(0, 6),
-      pairLeaders: (snapshot.pairLeaders || []).slice(0, 8),
+      overallHot: (snapshot.overallHot || []).slice(0, 5),
+      recent30Hot: (snapshot.recent30Hot || []).slice(0, 5),
+      recent100Hot: (snapshot.recent100Hot || []).slice(0, 5),
+      longOverdue: (snapshot.longOverdue || []).slice(0, 5),
+      pairLeaders: (snapshot.pairLeaders || []).slice(0, 4),
       sumMean: snapshot.sumMean,
       sumStd: snapshot.sumStd
     };
@@ -150,7 +150,7 @@ GAME 2|후보index|선택 이유
     if (error?.code === 'QUOTA_EXCEEDED') {
       return res.status(429).json({
         code: 'QUOTA_EXCEEDED',
-        error: 'Gemini 무료 요청 한도를 모두 사용했습니다.',
+        error: 'Gemini 요청 제한에 걸렸습니다.',
         retryAfter: error.retryAfter || 60
       });
     }

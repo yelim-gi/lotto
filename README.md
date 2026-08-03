@@ -60,3 +60,12 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## 2.2 안정화 패치
+
+- `내 번호 저장`과 `구매 등록`은 먼저 브라우저에 안전 저장한 뒤 Supabase 동기화를 시도합니다.
+- Supabase 세션 만료 시 refresh token으로 자동 갱신하고, 401 응답은 한 번 재시도합니다.
+- 원격 저장이 실패해도 번호가 사라지지 않으며, 원인이 포함된 안내가 표시됩니다.
+- Supabase SQL Editor에서 `supabase/ticket-storage-fix.sql`을 한 번 실행하세요.
+- Authentication → Providers에서 **Anonymous Sign-Ins**가 켜져 있어야 기기별 익명 사용자 저장이 가능합니다.
+- Gemini 후보는 최대 10개, 출력은 700토큰으로 축소했습니다. 429 발생 시 Google이 준 `retryDelay`를 우선 적용합니다.
