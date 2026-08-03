@@ -8,7 +8,10 @@ const validNumbers = (nums) =>
   nums.every((n) => Number.isInteger(n) && n >= 1 && n <= 45);
 
 function extractText(raw) {
-  return raw?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim() || '';
+  return raw?.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text || '')
+    .join('')
+    .trim() || '';
 }
 
 function cleanJsonText(text) {
@@ -18,7 +21,7 @@ function cleanJsonText(text) {
     .trim();
 }
 
-async function callGemini({ key, prompt, generationConfig, timeoutMs = 28000 }) {
+async function callGemini({ key, prompt, generationConfig = {}, timeoutMs = 45000 }) {
   const endpoint = `${API_BASE}/${encodeURIComponent(MODEL)}:generateContent?key=${encodeURIComponent(key)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -30,7 +33,12 @@ async function callGemini({ key, prompt, generationConfig, timeoutMs = 28000 }) 
       signal: controller.signal,
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig
+        generationConfig: {
+          // Gemini 3.5 Flash는 기본 사고 수준이 medium이다. 짧은 구조화 응답에서는
+          // 내부 사고가 출력 토큰을 소진하지 않도록 minimal로 제한한다.
+          thinkingConfig: { thinkingLevel: 'minimal' },
+          ...generationConfig
+        }
       })
     });
 
@@ -51,7 +59,10 @@ async function callGemini({ key, prompt, generationConfig, timeoutMs = 28000 }) 
     const text = extractText(raw);
 
     if (!text) throw new Error('Gemini가 빈 응답을 반환했습니다.');
-    if (finishReason === 'MAX_TOKENS') throw new Error('Gemini 응답이 길이 제한으로 중단되었습니다.');
+    if (finishReason === 'MAX_TOKENS') {
+      const used = raw?.usageMetadata?.totalTokenCount;
+      throw new Error(`Gemini 응답이 길이 제한으로 중단되었습니다${used ? ` (사용 토큰 ${used})` : ''}.`);
+    }
     if (finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(finishReason)) {
       throw new Error(`Gemini 응답이 완료되지 않았습니다: ${finishReason}`);
     }
@@ -67,24 +78,17 @@ async function callGemini({ key, prompt, generationConfig, timeoutMs = 28000 }) 
   }
 }
 
-async function selectCandidates({ key, prompt, candidateCount, safeCount }) {
-  const schema = {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      scenario: {
-        type: 'string',
-        description: '조건부 예측 시나리오를 120자 이내의 한 문단으로 작성'
-      },
-      selectedIndexes: {
-        type: 'array',
-        minItems: safeCount,
-        maxItems: safeCount,
-        items: { type: 'integer', minimum: 0, maximum: candidateCount - 1 }
-      }
-    },
-    required: ['scenario', 'selectedIndexes']
-  };
+async function selectCandidateIndexes({ key, candidateCount, safeCount, candidates, snapshot }) {
+  // Gemini 출력 자체를 JSON으로 파싱하지 않는다. 아주 짧은 쉼표 구분 index만
+  // 받아 숫자를 추출하므로, 문장이 일부 흔들려도 JSON 문자열 종료 오류가 없다.
+  const prompt = `한국 로또 6/45 분석 과제다.
+통계 요약과 후보를 비교해 다음 회차의 조건부 예측에 적합한 서로 다른 후보 index를 정확히 ${safeCount}개 선택하라.
+새 번호를 만들지 마라. 설명, 괄호, 코드블록, JSON을 쓰지 말고 숫자 index만 쉼표로 구분해 한 줄로 답하라.
+예시 형식: 0,3,7
+허용 index 범위: 0부터 ${candidateCount - 1}까지.
+
+통계 요약: ${JSON.stringify(snapshot)}
+후보: ${JSON.stringify(candidates.map((candidate, index) => ({ index, n: candidate.numbers, s: candidate.score })))}`;
 
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -93,26 +97,20 @@ async function selectCandidates({ key, prompt, candidateCount, safeCount }) {
         key,
         prompt,
         generationConfig: {
-          temperature: attempt === 1 ? 0.55 : 0.25,
-          responseMimeType: 'application/json',
-          responseJsonSchema: schema,
-          maxOutputTokens: 1024
-        }
+          maxOutputTokens: 128,
+          temperature: 0.2
+        },
+        timeoutMs: 30000
       });
 
-      const parsed = JSON.parse(cleanJsonText(text));
-      const indexes = [...new Set((parsed.selectedIndexes || []).map(Number))]
+      const indexes = [...new Set((text.match(/\d+/g) || []).map(Number))]
         .filter((index) => Number.isInteger(index) && index >= 0 && index < candidateCount)
         .slice(0, safeCount);
 
       if (indexes.length !== safeCount) {
-        throw new Error('Gemini가 필요한 수만큼 서로 다른 후보를 선택하지 않았습니다.');
+        throw new Error(`Gemini가 ${safeCount}개의 서로 다른 후보 index를 완성하지 않았습니다.`);
       }
-
-      return {
-        scenario: String(parsed.scenario || '').trim(),
-        indexes
-      };
+      return indexes;
     } catch (error) {
       lastError = error;
     }
@@ -121,16 +119,41 @@ async function selectCandidates({ key, prompt, candidateCount, safeCount }) {
   throw new Error(`Gemini 후보 선택에 실패했습니다: ${lastError?.message || '알 수 없는 오류'}`);
 }
 
+async function createScenario({ key, snapshot, selected }) {
+  const prompt = `한국 로또 6/45의 과거·최근 흐름을 해석해 다음 회차에 적용할 조건부 예측 시나리오를 한국어 2문장, 최대 180자로 작성하라.
+제공된 자료 밖의 사실, 운세, 예언, 확정 표현은 금지한다. 추세 지속과 평균 회귀 중 어느 가설을 더 반영했는지 명확히 써라.
+마크다운이나 JSON 없이 문장만 출력하라.
+
+통계 요약: ${JSON.stringify(snapshot)}
+선택 조합: ${JSON.stringify(selected.map((x) => x.numbers))}`;
+
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const text = await callGemini({
+        key,
+        prompt,
+        generationConfig: { maxOutputTokens: 2048 },
+        timeoutMs: 40000
+      });
+      const scenario = text.replace(/^['"“”]+|['"“”]+$/g, '').trim();
+      if (!scenario) throw new Error('빈 시나리오가 반환되었습니다.');
+      return scenario.slice(0, 500);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`AI 예측 시나리오 생성에 실패했습니다: ${lastError?.message || '알 수 없는 오류'}`);
+}
+
 async function createReason({ key, scenario, snapshot, candidate, gameNumber }) {
-  const prompt = `당신은 한국 로또 6/45 데이터 분석가다.
-아래 정보만 근거로 이 조합을 선택한 이유를 한국어 1~2문장, 최대 180자로 작성하라.
-숫자나 관찰값을 최소 하나 포함하고, 막연한 운·기운·예언 표현은 쓰지 마라.
-미래를 단정하지 말고 조건부 추론으로 표현하라.
-JSON, 마크다운, 제목, 번호 매기기 없이 이유 문장만 출력하라.
+  const prompt = `한국 로또 6/45 데이터 분석가로서 아래 조합의 선택 이유를 한국어 1~2문장, 최대 180자로 작성하라.
+제공된 수치나 관찰값을 최소 하나 포함하고, 운·기운·예언·당첨 보장 표현은 금지한다.
+미래를 단정하지 말고 조건부 추론으로 써라. JSON, 마크다운, 제목 없이 이유 문장만 출력하라.
 
 예측 시나리오: ${scenario}
-게임 번호: ${gameNumber}
-선택 조합: ${candidate.numbers.join(', ')}
+게임: ${gameNumber}
+조합: ${candidate.numbers.join(', ')}
 통계 점수: ${candidate.score}
 통계 요약: ${JSON.stringify(snapshot)}`;
 
@@ -140,22 +163,16 @@ JSON, 마크다운, 제목, 번호 매기기 없이 이유 문장만 출력하�
       const text = await callGemini({
         key,
         prompt,
-        generationConfig: {
-          temperature: attempt === 1 ? 0.45 : 0.2,
-          maxOutputTokens: 320
-        },
-        timeoutMs: 24000
+        generationConfig: { maxOutputTokens: 2048 },
+        timeoutMs: 40000
       });
-
       const reason = text.replace(/^['"“”]+|['"“”]+$/g, '').trim();
       if (!reason) throw new Error('빈 이유가 반환되었습니다.');
-      if (reason.length > 420) throw new Error('이유가 지나치게 길게 반환되었습니다.');
-      return reason;
+      return reason.slice(0, 500);
     } catch (error) {
       lastError = error;
     }
   }
-
   throw new Error(`${gameNumber}게임 설명 생성에 실패했습니다: ${lastError?.message || '알 수 없는 오류'}`);
 }
 
@@ -176,6 +193,9 @@ export default async function handler(req, res) {
       .filter((n) => n >= 1 && n <= 45)
       .slice(0, 5);
 
+    // 입력 후보를 너무 많이 보내면 모델이 불필요하게 오래 생각한다.
+    // 요청 수보다 약간 많은 상위 후보만 전달한다.
+    const candidateLimit = Math.min(16, Math.max(safeCount + 4, 10));
     const safeCandidates = (Array.isArray(candidates) ? candidates : [])
       .map((candidate) => ({
         numbers: (candidate?.numbers || []).map(Number).sort((a, b) => a - b),
@@ -186,44 +206,30 @@ export default async function handler(req, res) {
           validNumbers(candidate.numbers) &&
           safeFixed.every((number) => candidate.numbers.includes(number))
       )
-      .slice(0, 24);
+      .slice(0, candidateLimit);
 
     if (safeCandidates.length < safeCount) {
       throw new Error('AI가 선택할 통계 후보가 부족합니다. 다시 번호를 생성해주세요.');
     }
 
-    const selectionPrompt = `당신은 한국 로또 6/45의 과거 데이터를 시간 흐름에 따라 해석하는 분석가다.
-제공된 데이터 밖의 사실을 만들지 말고 미래를 확정적으로 단정하지 마라.
-
-해야 할 일:
-1. 전체 흐름, 최근 흐름, 장기 미출현, 동반 출현, 추세 지속과 평균 회귀 가능성을 비교한다.
-2. 다음 회차에 적용할 조건부 예측 시나리오를 120자 이내로 작성한다.
-3. 아래 후보 중 시나리오에 가장 부합하는 서로 다른 후보 index를 정확히 ${safeCount}개 선택한다.
-4. 번호 자체를 새로 만들지 말고 반드시 후보 index만 선택한다.
-5. 고정 번호 ${JSON.stringify(safeFixed)}가 포함된 후보만 이미 제공되어 있다.
-
-통계 요약:
-${JSON.stringify(snapshot)}
-
-후보 목록(index, numbers, score):
-${JSON.stringify(safeCandidates.map((candidate, index) => ({ index, ...candidate })))}`;
-
-    const selection = await selectCandidates({
+    const indexes = await selectCandidateIndexes({
       key,
-      prompt: selectionPrompt,
       candidateCount: safeCandidates.length,
-      safeCount
+      safeCount,
+      candidates: safeCandidates,
+      snapshot
     });
+    const selected = indexes.map((index) => safeCandidates[index]);
+    const scenario = await createScenario({ key, snapshot, selected });
 
-    const selected = selection.indexes.map((index) => safeCandidates[index]);
-
-    // 설명은 게임별로 별도 요청한다. 한 번의 긴 JSON 응답이 잘려 전체 결과가 깨지는 일을 막는다.
+    // 게임별 설명은 독립적인 짧은 요청으로 생성한다. 하나가 길어져도 다른 게임의
+    // 결과를 잘라먹지 않으며, 각 요청은 완전한 응답이 올 때까지 재시도한다.
     const games = await Promise.all(
       selected.map(async (candidate, index) => ({
         numbers: candidate.numbers,
         reason: await createReason({
           key,
-          scenario: selection.scenario,
+          scenario,
           snapshot,
           candidate,
           gameNumber: index + 1
@@ -231,11 +237,7 @@ ${JSON.stringify(safeCandidates.map((candidate, index) => ({ index, ...candidate
       }))
     );
 
-    return res.status(200).json({
-      scenario: selection.scenario,
-      games,
-      model: MODEL
-    });
+    return res.status(200).json({ scenario, games, model: MODEL });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'AI 추천에 실패했습니다.' });
   }
