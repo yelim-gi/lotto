@@ -213,7 +213,7 @@ function aiCacheKey() {
 function getCachedAI() {
   try {
     const cache = JSON.parse(localStorage.getItem(AI_CACHE_KEY) || 'null');
-    if (!cache || cache.key !== aiCacheKey() || Date.now() - cache.savedAt > 10 * 60 * 1000) return null;
+    if (!cache || cache.key !== aiCacheKey() || Date.now() - cache.savedAt > 30 * 1000) return null;
     return cache.value;
   } catch { return null; }
 }
@@ -244,7 +244,7 @@ async function generate() {
       if (cached) {
         state.aiGames = cached.games;
         state.aiScenario = cached.scenario;
-        state.aiMessage = '같은 조건의 최근 Gemini 결과를 불러왔습니다. 불필요한 API 사용을 줄였습니다.';
+        state.aiMessage = '같은 조건의 최근 Gemini 결과입니다. Gemini AI는 30초마다 새로 생성할 수 있습니다.';
       } else {
         const candidates = generateGames(state.draws, Math.min(40, Math.max(20, state.count * 5)), state.fixed)
           .map((game) => ({ numbers: game.numbers, score: game.score }));
