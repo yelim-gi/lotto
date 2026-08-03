@@ -5,11 +5,37 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const ball=n=>`<span class="ball b${Math.ceil(n/10)}">${n}</span>`;
 let state={draws:[],games:[],tickets:[],page:'recommend',mode:'balanced',count:5,fixed:[]};
 async function loadDraws(){
+  // 프로젝트에 포함된 1회~기본 최신 회차를 항상 먼저 불러옵니다.
+  // Supabase에는 사용자가 추가하거나 수정한 회차만 있어도 됩니다.
+  const r=await fetch('/data/lotto.json');
+  if(!r.ok) throw new Error('기본 로또 데이터를 불러오지 못했습니다.');
+  const raw=await r.json();
+  const merged=new Map(raw.map(x=>[Number(x.draw_no),{
+    draw_no:Number(x.draw_no),
+    draw_date:String(x.date||x.draw_date||'').slice(0,10),
+    numbers:(x.numbers||[]).map(Number).sort((a,b)=>a-b),
+    bonus_no:Number(x.bonus_no)
+  }]));
+
+  // Supabase 값은 같은 회차가 있으면 기본 데이터를 덮어쓰고,
+  // 새 회차라면 뒤에 추가됩니다.
   if(isConfigured){
-    try{const data=await select('lotto_draws','select=draw_no,draw_date,numbers,bonus_no&order=draw_no.asc');if(data?.length){state.draws=data;return;}}catch(e){console.warn(e)}
+    try{
+      const remote=await select('lotto_draws','select=draw_no,draw_date,numbers,bonus_no&order=draw_no.asc');
+      for(const row of remote||[]){
+        merged.set(Number(row.draw_no),{
+          draw_no:Number(row.draw_no),
+          draw_date:String(row.draw_date||'').slice(0,10),
+          numbers:(row.numbers||[]).map(Number).sort((a,b)=>a-b),
+          bonus_no:Number(row.bonus_no)
+        });
+      }
+    }catch(e){
+      console.warn('Supabase 회차 데이터 병합 실패, 기본 데이터로 계속합니다.',e);
+    }
   }
-  const r=await fetch('/data/lotto.json'); const raw=await r.json();
-  state.draws=raw.map(x=>({draw_no:x.draw_no,draw_date:x.date.slice(0,10),numbers:x.numbers,bonus_no:x.bonus_no}));
+
+  state.draws=[...merged.values()].sort((a,b)=>a.draw_no-b.draw_no);
 }
 async function loadTickets(){
   if(!isConfigured){state.tickets=JSON.parse(localStorage.getItem('lotto-tickets')||'[]');return;}
