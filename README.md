@@ -11,7 +11,7 @@ Vercel 배포용 Vite 프로젝트입니다. 통계 추천, Gemini AI 추천, �
 - `ADMIN_SYNC_SECRET`: 관리자 수동 업데이트 비밀번호
 - `LOTTO_DATA_URL`: `https://smok95.github.io/lotto/results/all.json`
 - `GEMINI_API_KEY`: Google AI Studio에서 발급한 Gemini API key
-- `GEMINI_MODEL`: 기본값 `gemini-2.5-flash` (생략 가능)
+- `GEMINI_MODEL`: 기본값 `gemini-3.5-flash` (생략 가능)
 
 `GEMINI_API_KEY`와 `SUPABASE_SERVICE_ROLE_KEY`에는 절대 `VITE_`를 붙이지 마세요.
 
