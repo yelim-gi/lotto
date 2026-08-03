@@ -1,9 +1,9 @@
 import { isConfigured,ensureAnonymousUser,select,insert,remove } from './lib/supabase.js';
-import { buildStats,generateGames,MODES,rankTicket } from './lib/stats.js';
+import { buildStats,generateGames,rankTicket } from './lib/stats.js';
 const qs=(s,e=document)=>e.querySelector(s), qsa=(s,e=document)=>[...e.querySelectorAll(s)];
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ball=n=>`<span class="ball b${Math.ceil(n/10)}">${n}</span>`;
-let state={draws:[],games:[],tickets:[],page:'recommend',mode:'balanced',count:5,fixed:[]};
+let state={draws:[],games:[],tickets:[],page:'recommend',count:5,fixed:[]};
 async function loadDraws(){
   // 프로젝트에 포함된 1회~기본 최신 회차를 항상 먼저 불러옵니다.
   // Supabase에는 사용자가 추가하거나 수정한 회차만 있어도 됩니다.
@@ -45,7 +45,7 @@ function nav(){return `<nav>${[['recommend','번호추천'],['stats','통계'],[
 function header(){const latest=state.draws.at(-1);return `<header><div><p class="eyebrow">LOTTO 6/45</p><h1>데이터 기반 번호 추천기</h1><p>과거 통계를 가중치로 활용하는 조합 생성 도구</p></div><div class="latest"><small>최신 데이터</small><strong>${latest?.draw_no||'-'}회</strong><span>${latest?.draw_date||''}</span></div></header>`}
 function recommend(){
  const fixed=Array.from({length:45},(_,i)=>i+1).map(n=>`<button class="pick ${state.fixed.includes(n)?'on':''}" data-fixed="${n}">${n}</button>`).join('');
- return `<section class="grid"><article class="card controls"><h2>추천 설정</h2><label>추천 방식<select id="mode">${Object.entries(MODES).map(([k,v])=>`<option value="${k}" ${state.mode===k?'selected':''}>${v}</option>`).join('')}</select></label><label>게임 수 <b id="countLabel">${state.count}</b><input id="count" type="range" min="1" max="10" value="${state.count}"></label><details><summary>고정 번호 선택 (${state.fixed.length}/5)</summary><div class="picker">${fixed}</div></details><button class="primary" id="generate">데이터 기반 번호 생성</button><p class="hint">게임 사이에는 같은 번호가 반복될 수 있습니다. 한 게임 안에서는 중복되지 않습니다.</p></article><article class="card results"><div class="titleRow"><h2>추천 결과</h2>${state.games.length?'<button id="saveAll">전체 저장</button>':''}</div>${state.games.length?state.games.map((g,i)=>`<div class="game"><b>${i+1}게임</b><div>${g.map(ball).join('')}</div><button data-save="${i}">저장</button></div>`).join(''):'<div class="empty">설정을 선택하고 번호를 생성해보세요.</div>'}</article></section>`;
+ return `<section class="grid"><article class="card controls"><h2>데이터 기반 추천</h2><p class="modelIntro">전체 회차의 출현 빈도, 최근 30·100회 흐름, 번호 간 동반출현, 미출현 기간과 조합 분포를 한 번에 종합합니다.</p><label>게임 수 <b id="countLabel">${state.count}</b><input id="count" type="range" min="1" max="10" value="${state.count}"></label><details><summary>고정 번호 선택 (${state.fixed.length}/5)</summary><div class="picker">${fixed}</div></details><button class="primary" id="generate">전체 데이터로 번호 생성</button><p class="hint">게임 사이에는 같은 번호가 반복될 수 있습니다. 추천지수는 과거 데이터와의 통계적 적합도이며 실제 당첨 확률은 아닙니다.</p></article><article class="card results"><div class="titleRow"><h2>추천 결과</h2>${state.games.length?'<button id="saveAll">전체 저장</button>':''}</div>${state.games.length?state.games.map((g,i)=>`<div class="gameCard"><div class="game"><b>${i+1}게임</b><div>${g.numbers.map(ball).join('')}</div><button data-save="${i}">저장</button></div><div class="gameMeta"><strong>추천지수 ${g.score}점</strong><span>${esc(g.reason)}</span></div></div>`).join(''):'<div class="empty">게임 수를 정하고 번호를 생성해보세요.</div>'}</article></section>`;
 }
 function statsPage(){const s=buildStats(state.draws); const rows=Array.from({length:45},(_,i)=>i+1).map(n=>({n,total:s.total[n],recent:s.recent[n],overdue:s.overdue[n]})).sort((a,b)=>b.total-a.total);return `<section class="card"><h2>번호 통계</h2><p class="hint">총 ${state.draws.length}개 회차 기준 · 최근 50회 포함</p><div class="tableWrap"><table><thead><tr><th>번호</th><th>전체 출현</th><th>최근 50회</th><th>미출현</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${ball(x.n)}</td><td>${x.total}회</td><td>${x.recent}회</td><td>${x.overdue}회차</td></tr>`).join('')}</tbody></table></div></section>`}
 function ticketsPage(){return `<section class="card"><div class="titleRow"><h2>내 번호</h2><button id="manualTicket">직접 추가</button></div>${state.tickets.length?state.tickets.map(t=>{const draw=state.draws.find(d=>d.draw_no===Number(t.target_draw_no));const r=rankTicket(t.numbers,draw);return `<div class="ticket"><div><strong>${esc(t.label||'저장 번호')}</strong><small>${t.target_draw_no?`${t.target_draw_no}회 · ${r.label}`:'회차 미지정'}</small></div><div>${t.numbers.map(ball).join('')}</div><button class="danger" data-delete="${t.id}">삭제</button></div>`}).join(''):'<div class="empty">저장한 번호가 없습니다.</div>'}</section>`}
@@ -53,10 +53,9 @@ function adminPage(){const next=(state.draws.at(-1)?.draw_no||0)+1;return `<sect
 function render(){const root=qs('#root');root.innerHTML=`<main>${header()}${nav()}${state.page==='recommend'?recommend():state.page==='stats'?statsPage():state.page==='tickets'?ticketsPage():adminPage()}<footer>통계 점수는 실제 당첨 확률을 높인다는 뜻이 아닙니다.</footer></main>`;bind();}
 function bind(){qsa('[data-page]').forEach(b=>b.onclick=()=>{state.page=b.dataset.page;render()});
  const count=qs('#count');if(count)count.oninput=e=>{state.count=Number(e.target.value);qs('#countLabel').textContent=state.count};
- const mode=qs('#mode');if(mode)mode.onchange=e=>state.mode=e.target.value;
  qsa('[data-fixed]').forEach(b=>b.onclick=()=>{const n=Number(b.dataset.fixed);state.fixed=state.fixed.includes(n)?state.fixed.filter(x=>x!==n):state.fixed.length<5?[...state.fixed,n]:state.fixed;render()});
- const gen=qs('#generate');if(gen)gen.onclick=()=>{state.games=generateGames(state.draws,state.count,state.mode,state.fixed);render()};
- qsa('[data-save]').forEach(b=>b.onclick=()=>saveTicket(state.games[Number(b.dataset.save)])); const sa=qs('#saveAll');if(sa)sa.onclick=async()=>{for(const g of state.games)await saveTicket(g,false);alert('전체 저장했습니다.');};
+ const gen=qs('#generate');if(gen)gen.onclick=()=>{state.games=generateGames(state.draws,state.count,state.fixed);render()};
+ qsa('[data-save]').forEach(b=>b.onclick=()=>saveTicket(state.games[Number(b.dataset.save)].numbers)); const sa=qs('#saveAll');if(sa)sa.onclick=async()=>{for(const g of state.games)await saveTicket(g.numbers,false);alert('전체 저장했습니다.');};
  qsa('[data-delete]').forEach(b=>b.onclick=()=>deleteTicket(b.dataset.delete)); const mt=qs('#manualTicket');if(mt)mt.onclick=manualTicket;
  const md=qs('#manualDraw');if(md)md.onsubmit=manualDraw; const sy=qs('#sync');if(sy)sy.onsubmit=syncDraws;
 }
