@@ -23,8 +23,8 @@ function getRetrySeconds(raw) {
   return match ? Math.max(1, Math.ceil(Number(match[1]))) : 60;
 }
 
-async function callGemini({ key, prompt, timeoutMs = 40000 }) {
-  const endpoint = `${API_BASE}/${encodeURIComponent(MODEL)}:generateContent?key=${encodeURIComponent(key)}`;
+async function callGemini({ key, prompt, model = MODEL, timeoutMs = 40000 }) {
+  const endpoint = `${API_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -48,7 +48,7 @@ async function callGemini({ key, prompt, timeoutMs = 40000 }) {
     try { raw = rawText ? JSON.parse(rawText) : {}; } catch { /* Google 응답 자체가 비정상인 경우 */ }
 
     if (response.status === 429) {
-      const error = new Error('Gemini 요청 제한에 걸렸습니다.');
+      const error = new Error('Gemini 무료 사용 한도를 초과했습니다.');
       error.code = 'QUOTA_EXCEEDED';
       error.retryAfter = getRetrySeconds(raw);
       throw error;
@@ -115,7 +115,7 @@ export default async function handler(req, res) {
         score: Number(candidate?.score) || 0
       }))
       .filter((candidate) => validNumbers(candidate.numbers) && safeFixed.every((n) => candidate.numbers.includes(n)))
-      .slice(0, Math.min(10, Math.max(safeCount + 2, 6)));
+      .slice(0, Math.min(10, Math.max(safeCount, safeCount + 3)));
 
     if (safeCandidates.length < safeCount) throw new Error('AI가 선택할 통계 후보가 부족합니다. 다시 생성해주세요.');
 
@@ -123,11 +123,11 @@ export default async function handler(req, res) {
       drawCount: snapshot.drawCount,
       latestDraw: snapshot.latestDraw,
       latestNumbers: snapshot.latestNumbers,
-      overallHot: (snapshot.overallHot || []).slice(0, 5),
-      recent30Hot: (snapshot.recent30Hot || []).slice(0, 5),
-      recent100Hot: (snapshot.recent100Hot || []).slice(0, 5),
-      longOverdue: (snapshot.longOverdue || []).slice(0, 5),
-      pairLeaders: (snapshot.pairLeaders || []).slice(0, 4),
+      overallHot: (snapshot.overallHot || []).slice(0, 6),
+      recent30Hot: (snapshot.recent30Hot || []).slice(0, 6),
+      recent100Hot: (snapshot.recent100Hot || []).slice(0, 6),
+      longOverdue: (snapshot.longOverdue || []).slice(0, 6),
+      pairLeaders: (snapshot.pairLeaders || []).slice(0, 8),
       sumMean: snapshot.sumMean,
       sumStd: snapshot.sumStd
     };
@@ -143,14 +143,14 @@ GAME 2|후보index|선택 이유
 통계:${JSON.stringify(compactSnapshot)}
 후보:${JSON.stringify(safeCandidates.map((x, index) => ({ index, n: x.numbers, score: x.score })))}`;
 
-    const text = await callGemini({ key, prompt });
+    const text = await callGemini({ key, prompt, model: MODEL });
     const parsed = parseCompactResponse(text, safeCandidates, safeCount);
     return res.status(200).json({ ...parsed, model: MODEL });
   } catch (error) {
     if (error?.code === 'QUOTA_EXCEEDED') {
       return res.status(429).json({
         code: 'QUOTA_EXCEEDED',
-        error: 'Gemini 요청 제한에 걸렸습니다.',
+        error: 'Gemini 요청 제한에 걸렸습니다. 안내된 시간이 지난 뒤 다시 시도해주세요.',
         retryAfter: error.retryAfter || 60
       });
     }

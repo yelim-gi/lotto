@@ -1,4 +1,4 @@
-import { isConfigured, ensureAnonymousUser, select, insert, remove } from './lib/supabase.js';
+import { isConfigured, select } from './lib/supabase.js';
 import { buildStats, generateGames, rankTicket, createAISnapshot } from './lib/stats.js';
 
 const qs = (selector, root = document) => root.querySelector(selector);
@@ -8,6 +8,8 @@ const STORAGE_SAVED = 'lotto-saved-numbers-v2';
 const STORAGE_PURCHASED = 'lotto-purchased-tickets-v2';
 const AI_COOLDOWN_KEY = 'lotto-ai-cooldown-until';
 const AI_CACHE_KEY = 'lotto-ai-last-result-v2';
+const CLIENT_ID_KEY = 'lotto-client-id-v1';
+function clientId(){let id=localStorage.getItem(CLIENT_ID_KEY);if(!id){id=crypto.randomUUID();localStorage.setItem(CLIENT_ID_KEY,id)}return id;}
 
 let state = {
   draws: [],
@@ -70,40 +72,36 @@ function normalizeTicket(row) {
   };
 }
 
-function readLocalTickets(key) {
-  try { return JSON.parse(localStorage.getItem(key) || '[]').map(normalizeTicket); }
-  catch { return []; }
-}
-function writeLocalTickets(key, rows) {
-  localStorage.setItem(key, JSON.stringify(rows));
-}
-function mergeTickets(remote, local) {
+function mergeTickets(localRows, remoteRows) {
   const merged = new Map();
-  for (const row of [...local, ...remote]) merged.set(String(row.id), normalizeTicket(row));
+  for (const row of [...localRows, ...remoteRows]) {
+    const ticket = normalizeTicket(row);
+    const key = String(ticket.id || `${ticket.ticket_type}:${ticket.target_draw_no || ''}:${ticket.numbers.join('-')}:${ticket.created_at || ''}`);
+    merged.set(key, ticket);
+  }
   return [...merged.values()].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 }
 
 async function loadTickets() {
-  const localSaved = readLocalTickets(STORAGE_SAVED);
-  const localPurchased = readLocalTickets(STORAGE_PURCHASED);
-  if (!isConfigured) {
-    state.savedNumbers = localSaved;
-    state.purchases = localPurchased;
-    return;
-  }
-
+  const localSaved = JSON.parse(localStorage.getItem(STORAGE_SAVED) || '[]').map(normalizeTicket);
+  const localPurchased = JSON.parse(localStorage.getItem(STORAGE_PURCHASED) || '[]').map(normalizeTicket);
   try {
-    await ensureAnonymousUser();
-    const rows = (await select('saved_tickets', 'select=*&order=created_at.desc')) || [];
-    state.savedNumbers = mergeTickets(rows.filter((row) => (row.ticket_type || 'saved') === 'saved'), localSaved);
-    state.purchases = mergeTickets(rows.filter((row) => row.ticket_type === 'purchased'), localPurchased);
+    const response = await fetch(`/api/tickets?client_id=${encodeURIComponent(clientId())}`);
+    const data = await readJsonResponse(response);
+    if (!response.ok) throw new Error(data.error || '저장번호 동기화 실패');
+    const rows = (data.items || []).map(normalizeTicket);
+    const remoteSaved = rows.filter(r => (r.ticket_type || 'saved') === 'saved');
+    const remotePurchased = rows.filter(r => r.ticket_type === 'purchased');
+    state.savedNumbers = mergeTickets(localSaved, remoteSaved);
+    state.purchases = mergeTickets(localPurchased, remotePurchased);
+    localStorage.setItem(STORAGE_SAVED, JSON.stringify(state.savedNumbers));
+    localStorage.setItem(STORAGE_PURCHASED, JSON.stringify(state.purchases));
   } catch (error) {
-    console.warn('Supabase 저장번호 로딩 실패, 브라우저 백업 사용:', error);
+    console.warn('저장번호 동기화 실패:', error);
     state.savedNumbers = localSaved;
     state.purchases = localPurchased;
   }
 }
-
 const nav = () => `<nav>${[
   ['recommend', '번호추천'],
   ['stats', '통계'],
@@ -252,7 +250,7 @@ async function generate() {
       const cooldownUntil = Number(localStorage.getItem(AI_COOLDOWN_KEY) || 0);
       if (cooldownUntil > Date.now()) {
         const seconds = Math.ceil((cooldownUntil - Date.now()) / 1000);
-        throw new Error(`Gemini 요청 제한 대기 중입니다. ${seconds}초 후 새로 생성할 수 있습니다.`);
+        throw new Error(`Gemini 무료 요청 한도 대기 중입니다. 약 ${seconds}초 후 다시 시도해주세요.`);
       }
 
       const cached = getCachedAI();
@@ -272,7 +270,7 @@ async function generate() {
         if (response.status === 429 || data.code === 'QUOTA_EXCEEDED') {
           const retryAfter = Math.max(1, Number(data.retryAfter) || 60);
           localStorage.setItem(AI_COOLDOWN_KEY, String(Date.now() + retryAfter * 1000));
-          throw new Error(`Gemini의 단기 요청 제한에 걸렸습니다. ${retryAfter}초 후 새로 생성할 수 있습니다. 통계 추천은 계속 사용할 수 있습니다.`);
+          throw new Error(`Gemini 무료 요청 한도를 모두 사용했습니다. 약 ${retryAfter}초 후 다시 시도해주세요. 통계 추천은 계속 사용할 수 있습니다.`);
         }
         if (!response.ok) throw new Error(data.error || 'Gemini 추천에 실패했습니다.');
         if (!Array.isArray(data.games) || data.games.length !== state.count) throw new Error('Gemini 결과가 완성되지 않았습니다. 다시 시도해주세요.');
@@ -290,42 +288,29 @@ async function generate() {
 }
 
 async function persistTicket({ numbers, label, targetDrawNo = null, ticketType }) {
-  const item = {
-    id: crypto.randomUUID(),
-    label,
-    target_draw_no: targetDrawNo,
-    numbers: [...numbers].map(Number).sort((a, b) => a - b),
-    ticket_type: ticketType,
-    created_at: new Date().toISOString()
-  };
-  const storageKey = ticketType === 'purchased' ? STORAGE_PURCHASED : STORAGE_SAVED;
-  const localRows = readLocalTickets(storageKey);
-  writeLocalTickets(storageKey, [item, ...localRows.filter((row) => String(row.id) !== item.id)]);
-
-  let remoteError = null;
-  if (isConfigured) {
-    try {
-      const user = await ensureAnonymousUser();
-      const created = await insert('saved_tickets', { ...item, user_id: user.id });
-      if (!created) throw new Error('Supabase가 저장 결과를 반환하지 않았습니다.');
-    } catch (error) {
-      remoteError = error;
-      console.warn('Supabase 저장 실패, 브라우저에 안전 저장됨:', error);
-    }
+  const row = { id: crypto.randomUUID(), label, target_draw_no: targetDrawNo, numbers: [...numbers].map(Number).sort((a,b)=>a-b), ticket_type: ticketType, created_at: new Date().toISOString() };
+  const key = ticketType === 'purchased' ? STORAGE_PURCHASED : STORAGE_SAVED;
+  const list = ticketType === 'purchased' ? state.purchases : state.savedNumbers;
+  list.unshift(row); localStorage.setItem(key, JSON.stringify(list)); render();
+  const response = await fetch('/api/tickets',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...row,client_id:clientId()})});
+  const data = await readJsonResponse(response);
+  if(!response.ok) throw new Error(data.error || 'Supabase 동기화 실패');
+  if (data.item) {
+    const synced = normalizeTicket(data.item);
+    const current = ticketType === 'purchased' ? state.purchases : state.savedNumbers;
+    const replaced = current.map((item) => String(item.id) === String(row.id) ? synced : item);
+    if (ticketType === 'purchased') state.purchases = replaced; else state.savedNumbers = replaced;
+    localStorage.setItem(key, JSON.stringify(replaced));
   }
-  await loadTickets();
-  return { remoteError };
 }
-
 async function saveNumber(numbers) {
   const label = prompt('저장할 번호의 이름이나 메모를 입력하세요.', '마음에 드는 번호');
   if (label === null) return;
   try {
-    const { remoteError } = await persistTicket({ numbers, label: label.trim() || '마음에 드는 번호', ticketType: 'saved' });
+    await persistTicket({ numbers, label: label.trim() || '마음에 드는 번호', ticketType: 'saved' });
     state.page = 'saved';
     render();
-    if (remoteError) alert(`번호는 이 브라우저에 저장됐지만 Supabase 동기화는 실패했습니다.\n${remoteError.message}`);
-  } catch (error) { alert(`내 번호 저장 실패: ${error.message}`); }
+  } catch (error) { state.page='saved'; render(); alert(`번호는 이 브라우저에 저장됐습니다. Supabase 동기화만 실패했습니다: ${error.message}`); }
 }
 
 async function registerPurchase(numbers, defaultLabel = '구매 번호') {
@@ -337,28 +322,21 @@ async function registerPurchase(numbers, defaultLabel = '구매 번호') {
   const label = prompt('구매 기록 메모를 입력하세요.', defaultLabel);
   if (label === null) return;
   try {
-    const { remoteError } = await persistTicket({ numbers, label: label.trim() || defaultLabel, targetDrawNo, ticketType: 'purchased' });
+    await persistTicket({ numbers, label: label.trim() || defaultLabel, targetDrawNo, ticketType: 'purchased' });
     state.page = 'purchases';
     render();
-    if (remoteError) alert(`구매 기록은 이 브라우저에 저장됐지만 Supabase 동기화는 실패했습니다.\n${remoteError.message}`);
-  } catch (error) { alert(`구매 등록 실패: ${error.message}`); }
+  } catch (error) { state.page='purchases'; render(); alert(`구매번호는 이 브라우저에 저장됐습니다. Supabase 동기화만 실패했습니다: ${error.message}`); }
 }
 
 async function deleteRecord(id, ticketType) {
   if (!confirm('삭제할까요?')) return;
-  try {
-    const key = ticketType === 'purchased' ? STORAGE_PURCHASED : STORAGE_SAVED;
-    const local = readLocalTickets(key).filter((item) => String(item.id) !== String(id));
-    writeLocalTickets(key, local);
-    if (isConfigured) {
-      try { await remove('saved_tickets', id); }
-      catch (error) { console.warn('Supabase 삭제 실패:', error); }
-    }
-    await loadTickets();
-    render();
-  } catch (error) { alert(`삭제 실패: ${error.message}`); }
+  const key = ticketType === 'purchased' ? STORAGE_PURCHASED : STORAGE_SAVED;
+  const list = (ticketType === 'purchased' ? state.purchases : state.savedNumbers).filter(item => String(item.id)!==String(id));
+  localStorage.setItem(key, JSON.stringify(list));
+  if(ticketType==='purchased') state.purchases=list; else state.savedNumbers=list;
+  render();
+  try{await fetch(`/api/tickets?id=${encodeURIComponent(id)}&client_id=${encodeURIComponent(clientId())}`,{method:'DELETE'});}catch{}
 }
-
 function askNumbers() {
   const raw = prompt('번호 6개를 쉼표로 입력하세요.', '1, 7, 15, 22, 31, 43');
   if (!raw) return null;
